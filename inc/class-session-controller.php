@@ -24,11 +24,6 @@ class Session_Controller extends WP_REST_Controller {
 	 */
 	public function register_routes() {
 		register_rest_route( $this->namespace, '/sessions', [
-			// [
-			// 	'methods'       => WP_REST_Server::READABLE,
-			// 	'callback'      => [ $this, 'get_items' ],
-			// 	'auth_callback' => 'check_authentication',
-			// ],
 			[
 				'methods'  => WP_REST_Server::CREATABLE,
 				'callback' => [ $this, 'create_item' ],
@@ -56,19 +51,14 @@ class Session_Controller extends WP_REST_Controller {
 						'default' => false,
 					],
 				],
-			]
+			],
 		] );
 		register_rest_route( $this->namespace, '/sessions/current', [
-			// [
-			// 	'methods' => WP_REST_Server::READABLE,
-			// 	'callback' => [ $this, 'get_item' ],
-			// 	'auth_callback'=> 'check_authentication',
-			// ],
 			[
 				'methods' => WP_REST_Server::DELETABLE,
 				'callback' => [ $this, 'delete_item' ],
 				'permission_callback' => [ $this, 'check_authentication' ],
-			]
+			],
 		] );
 	}
 
