@@ -56,7 +56,7 @@ class Session_Controller extends WP_REST_Controller {
 						'default' => false,
 					],
 				],
-			]
+			],
 		] );
 		register_rest_route( $this->namespace, '/sessions/current', [
 			// [
@@ -68,7 +68,7 @@ class Session_Controller extends WP_REST_Controller {
 				'methods' => WP_REST_Server::DELETABLE,
 				'callback' => [ $this, 'delete_item' ],
 				'permission_callback' => [ $this, 'check_authentication' ],
-			]
+			],
 		] );
 	}
 
