@@ -127,7 +127,6 @@ class Session_Controller extends WP_REST_Controller {
 			return $user;
 		}
 
-
 		// If the 2FA plugin is active, validate the 2fa part of the request.
 		if ( class_exists( 'Two_Factor_Core' ) ) {
 			$valid_2fa = $this->validate_2fa( $request, $user );
@@ -157,15 +156,14 @@ class Session_Controller extends WP_REST_Controller {
 	/**
 	 * Validate the 2fa related portion of create session reuest.
 	 *
-	 * @param WP_REST_Request $request
-	 * @param WP_User $user
+	 * @param WP_REST_Request $request The request object.
+	 * @param WP_User $user The user to validate the request for.
 	 * @return WP_Error|null
 	 */
 	protected function validate_2fa( $request, WP_User $user ) : ?WP_Error {
 		if ( ! Two_Factor_Core::is_user_using_two_factor( $user->ID ) ) {
 			return null;
 		}
-
 
 		$user_providers = Two_Factor_Core::get_enabled_providers_for_user( $user );
 		$provider_name_map = [
@@ -176,14 +174,13 @@ class Session_Controller extends WP_REST_Controller {
 
 		$user_providers_public_names = [];
 		foreach ( $user_providers as $provider ) {
-			$user_providers_public_names[] = array_search( $provider, $provider_name_map );
+			$user_providers_public_names[] = array_search( $provider, $provider_name_map, true );
 		}
 
 		$error = new WP_Error( '2fa_required', 'Please provide your 2FA code.', [
 			'status' => 401,
 			'2fa_providers' => $user_providers_public_names,
 		] );
-
 
 		$provider = $provider_name_map[ $request['2fa']['provider'] ];
 
@@ -222,8 +219,6 @@ class Session_Controller extends WP_REST_Controller {
 		}
 
 		return $error;
-
-		//self::show_two_factor_login( $user );
 	}
 
 	/**
