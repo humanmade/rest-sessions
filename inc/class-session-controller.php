@@ -2,12 +2,14 @@
 
 namespace REST_Sessions;
 
+use Two_Factor_Core;
 use WP_Error;
 use WP_REST_Controller;
 use WP_REST_Request;
 use WP_REST_Response;
 use WP_REST_Server;
 use WP_Session_Tokens;
+use WP_User;
 
 class Session_Controller extends WP_REST_Controller {
 	const NONCE_ACTION = 'wp_rest_sessions';
@@ -49,6 +51,23 @@ class Session_Controller extends WP_REST_Controller {
 					'remember' => [
 						'type'    => 'boolean',
 						'default' => false,
+					],
+					'2fa' => [
+						'type' => 'object',
+						'properties' => [
+							'provider' => [
+								'type' => 'string',
+								'enum' => [
+									'email',
+									'totp',
+									'backup_codes',
+								],
+							],
+							'code' => [
+								'type' => 'string',
+							],
+						],
+						'required' => false,
 					],
 				],
 			],
@@ -92,6 +111,10 @@ class Session_Controller extends WP_REST_Controller {
 		};
 		add_action( 'set_logged_in_cookie', $store_logged_in_cookie );
 
+		// Remove 2fa plugin from hooking into the login action, as it will output HTML if a 2FA code etc is not found.
+		// We do our own 2fa checking.
+		remove_action( 'wp_login', 'Two_Factor_Core::wp_login' );
+
 		$user = wp_signon( [
 			'user_login'    => $request['username'],
 			'user_password' => $request['password'],
@@ -102,6 +125,16 @@ class Session_Controller extends WP_REST_Controller {
 
 		if ( is_wp_error( $user ) ) {
 			return $user;
+		}
+
+
+		// If the 2FA plugin is active, validate the 2fa part of the request.
+		if ( class_exists( 'Two_Factor_Core' ) ) {
+			$valid_2fa = $this->validate_2fa( $request, $user );
+
+			if ( is_wp_error( $valid_2fa ) ) {
+				return $valid_2fa;
+			}
 		}
 
 		$_COOKIE[ LOGGED_IN_COOKIE ] = $cookie;
@@ -119,6 +152,78 @@ class Session_Controller extends WP_REST_Controller {
 
 		$response->set_status( 201 );
 		return $response;
+	}
+
+	/**
+	 * Validate the 2fa related portion of create session reuest.
+	 *
+	 * @param WP_REST_Request $request
+	 * @param WP_User $user
+	 * @return WP_Error|null
+	 */
+	protected function validate_2fa( $request, WP_User $user ) : ?WP_Error {
+		if ( ! Two_Factor_Core::is_user_using_two_factor( $user->ID ) ) {
+			return null;
+		}
+
+
+		$user_providers = Two_Factor_Core::get_enabled_providers_for_user( $user );
+		$provider_name_map = [
+			'email' => 'Two_Factor_Email',
+			'totp' => 'Two_Factor_Totp',
+			'backup_codes' => 'Two_Factor_Backup_Codes',
+		];
+
+		$user_providers_public_names = [];
+		foreach ( $user_providers as $provider ) {
+			$user_providers_public_names[] = array_search( $provider, $provider_name_map );
+		}
+
+		$error = new WP_Error( '2fa_required', 'Please provide your 2FA code.', [
+			'status' => 401,
+			'2fa_providers' => $user_providers_public_names,
+		] );
+
+
+		$provider = $provider_name_map[ $request['2fa']['provider'] ];
+
+		// Validate provider / value if it's been passed.
+		if ( ! empty( $request['2fa']['provider'] ) && ! empty( $request['2fa']['value'] ) ) {
+			if ( ! in_array( $provider, $user_providers, true ) ) {
+				$error->add( 'invalid_2fa_provider', 'User does not have this provider enabled.' );
+			}
+			$providers = Two_Factor_Core::get_providers();
+
+			switch ( $provider ) {
+				case 'Two_Factor_Email':
+					$valid = $providers[ $provider ]->validate_token( $user->ID, $request['2fa']['value'] );
+					// Valid email token, all good!
+					if ( $valid === true ) {
+						return null;
+					}
+					$error->add( 'invalid_2fa_value', 'The email code you provided was not valid.' );
+					break;
+				case 'Two_Factor_Totp':
+					$key = get_user_meta( $user->ID, $provider::SECRET_META_KEY, true );
+					$valid = $providers[ $provider ]->is_valid_authcode( $key, $request['2fa']['value'] );
+					if ( $valid === true ) {
+						return null;
+					}
+					$error->add( 'invalid_2fa_value', 'The one-time code you provided was not valid.' );
+					break;
+				case 'Two_Factor_Backup_Codes':
+					$valid = $providers[ $provider ]->validate_code( $user, $request['2fa']['value'] );
+					if ( $valid === true ) {
+						return null;
+					}
+					$error->add( 'invalid_2fa_value', 'The backup code you provided was not valid.' );
+					break;
+			}
+		}
+
+		return $error;
+
+		//self::show_two_factor_login( $user );
 	}
 
 	/**
