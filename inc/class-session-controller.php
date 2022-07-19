@@ -132,6 +132,7 @@ class Session_Controller extends WP_REST_Controller {
 			$valid_2fa = $this->validate_2fa( $request, $user );
 
 			if ( is_wp_error( $valid_2fa ) ) {
+				wp_clear_auth_cookie();
 				return $valid_2fa;
 			}
 		}
@@ -183,13 +184,13 @@ class Session_Controller extends WP_REST_Controller {
 		] );
 
 		$provider = $provider_name_map[ $request['2fa']['provider'] ];
+		$providers = Two_Factor_Core::get_providers();
 
 		// Validate provider / value if it's been passed.
 		if ( ! empty( $request['2fa']['provider'] ) && ! empty( $request['2fa']['value'] ) ) {
 			if ( ! in_array( $provider, $user_providers, true ) ) {
 				$error->add( 'invalid_2fa_provider', 'User does not have this provider enabled.' );
 			}
-			$providers = Two_Factor_Core::get_providers();
 
 			switch ( $provider ) {
 				case 'Two_Factor_Email':
@@ -215,6 +216,12 @@ class Session_Controller extends WP_REST_Controller {
 					}
 					$error->add( 'invalid_2fa_value', 'The backup code you provided was not valid.' );
 					break;
+			}
+		} else {
+			// If a 2fa value was not provided, and we're going to return an error with the 2FA challange, we have to generate
+			// an email 2fa code (if that option is enabled on their account)
+			if ( in_array( 'Two_Factor_Email', $user_providers, true ) ) {
+				$providers['Two_Factor_Email']->generate_and_email_token( $user );
 			}
 		}
 
