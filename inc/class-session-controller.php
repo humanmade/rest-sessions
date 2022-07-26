@@ -167,6 +167,8 @@ class Session_Controller extends WP_REST_Controller {
 		}
 
 		$user_providers = Two_Factor_Core::get_enabled_providers_for_user( $user );
+		$user_primary_provider = Two_Factor_Core::get_primary_provider_for_user( $user->ID );
+
 		$provider_name_map = [
 			'email' => 'Two_Factor_Email',
 			'totp' => 'Two_Factor_Totp',
@@ -175,12 +177,18 @@ class Session_Controller extends WP_REST_Controller {
 
 		$user_providers_public_names = [];
 		foreach ( $user_providers as $provider ) {
-			$user_providers_public_names[] = array_search( $provider, $provider_name_map, true );
+			$name = array_search( $provider, $provider_name_map, true );
+			if ( $name ) {
+				$user_providers_public_names[] = $name;
+			}
 		}
+
+		$user_provider_primary_name = array_search( $user_primary_provider, $provider_name_map, true );
 
 		$error = new WP_Error( '2fa_required', 'Please provide your 2FA code.', [
 			'status' => 401,
 			'2fa_providers' => $user_providers_public_names,
+			'2fa_provider_primary' => $user_provider_primary_name,
 		] );
 
 		$provider = $provider_name_map[ $request['2fa']['provider'] ];
