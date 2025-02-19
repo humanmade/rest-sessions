@@ -82,6 +82,14 @@ class Session_Controller extends WP_REST_Controller {
 				'permission_callback' => [ $this, 'check_authentication' ],
 			],
 		] );
+		register_rest_route( $this->namespace, '/sessions/revalidate', [
+			'methods' => WP_REST_Server::CREATABLE,
+			'callback' => [ $this, 'revalidate' ],
+			'permission_callback' => [ $this, 'check_authentication' ],
+			'args' => [
+				'2fa' => $mfa_args,
+			],
+		] );
 	}
 
 	/**
@@ -170,6 +178,74 @@ class Session_Controller extends WP_REST_Controller {
 	}
 
 	/**
+	 * Revalidate a session.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return mixed REST response.
+	 */
+	public function revalidate( $request ) {
+		if ( ! is_user_logged_in() ) {
+			return new WP_Error(
+				'appregistry.auth.not_logged_in',
+				'You are not logged in'
+			);
+		}
+
+		if ( ! class_exists( 'Two_Factor_Core' ) ) {
+			return new WP_Error(
+				'appregistry.auth.2fa_not_active',
+				'Two Factor Authentication is not active'
+			);
+		}
+
+		// Enforce the use of the same 2FA mechanism that was used to initially
+		// log in.
+		$user = wp_get_current_user();
+		$token = wp_get_session_token();
+		if ( empty( $token ) ) {
+			return new WP_Error(
+				'appregistry.auth.no_session',
+				'No session found'
+			);
+		}
+
+		$manager = WP_Session_Tokens::get_instance( $user->ID );
+		$session = $manager->get( $token );
+
+		$provider_class = static::NAME_MAP[ $request['2fa']['provider'] ] ?? null;
+		if ( $provider_class !== $session['two-factor-provider'] ) {
+			// Force a bad 2FA to return the challenge.
+			$not_request = [];
+			return $this->validate_2fa( $not_request, $user );
+		}
+
+		// If the 2FA plugin is active, validate the 2fa part of the request.
+		$valid_2fa = $this->validate_2fa( $request, $user );
+
+		if ( is_wp_error( $valid_2fa ) ) {
+			// wp_clear_auth_cookie();
+			return $valid_2fa;
+		}
+
+		// Update the session metadata with the revalidation details.
+		$token = wp_get_session_token();
+
+		// Update the session's data.
+		$manager = WP_Session_Tokens::get_instance( $user->ID );
+		$session = $manager->get( $token );
+		$session['two-factor-login'] = time();
+		$manager->update( $token, $session );
+
+		$response = $this->prepare_item_for_response( $token, $request );
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$response->set_status( 201 );
+		return $response;
+	}
+
+	/**
 	 * Validate the 2fa related portion of create session reuest.
 	 *
 	 * @param WP_REST_Request $request The request object.
@@ -199,6 +275,9 @@ class Session_Controller extends WP_REST_Controller {
 			'2fa_providers' => $user_providers_public_names,
 			'2fa_provider_primary' => $user_provider_primary_name,
 		] );
+		if ( empty( $request['2fa']['provider'] ) ) {
+			return $error;
+		}
 
 		$provider = static::NAME_MAP[ $request['2fa']['provider'] ];
 		$providers = Two_Factor_Core::get_providers();
