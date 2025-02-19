@@ -221,9 +221,7 @@ class Session_Controller extends WP_REST_Controller {
 
 		// If the 2FA plugin is active, validate the 2fa part of the request.
 		$valid_2fa = $this->validate_2fa( $request, $user );
-
 		if ( is_wp_error( $valid_2fa ) ) {
-			// wp_clear_auth_cookie();
 			return $valid_2fa;
 		}
 
