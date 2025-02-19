@@ -12,6 +12,12 @@ use WP_Session_Tokens;
 use WP_User;
 
 class Session_Controller extends WP_REST_Controller {
+	const NAME_MAP = [
+		'email' => 'Two_Factor_Email',
+		'totp' => 'Two_Factor_Totp',
+		'backup_codes' => 'Two_Factor_Backup_Codes',
+	];
+
 	const NONCE_ACTION = 'wp_rest_sessions';
 
 	/**
@@ -25,6 +31,19 @@ class Session_Controller extends WP_REST_Controller {
 	 * Register routes for authentication.
 	 */
 	public function register_routes() {
+		$mfa_args = [
+			'type' => 'object',
+			'properties' => [
+				'provider' => [
+					'type' => 'string',
+					'enum' => array_keys( static::NAME_MAP ),
+				],
+				'code' => [
+					'type' => 'string',
+				],
+			],
+			'required' => false,
+		];
 		register_rest_route( $this->namespace, '/sessions', [
 			[
 				'methods'  => WP_REST_Server::CREATABLE,
@@ -52,23 +71,7 @@ class Session_Controller extends WP_REST_Controller {
 						'type'    => 'boolean',
 						'default' => false,
 					],
-					'2fa' => [
-						'type' => 'object',
-						'properties' => [
-							'provider' => [
-								'type' => 'string',
-								'enum' => [
-									'email',
-									'totp',
-									'backup_codes',
-								],
-							],
-							'code' => [
-								'type' => 'string',
-							],
-						],
-						'required' => false,
-					],
+					'2fa' => $mfa_args,
 				],
 			],
 		] );
@@ -145,6 +148,18 @@ class Session_Controller extends WP_REST_Controller {
 			return new WP_Error();
 		}
 
+		// Attach the 2FA session information.
+		if ( class_exists( 'Two_Factor_Core' ) ) {
+			$provider = static::NAME_MAP[ $request['2fa']['provider'] ];
+
+			// Add the 2FA data to the new session.
+			$manager = WP_Session_Tokens::get_instance( $user->ID );
+			$session = $manager->get( $token );
+			$session['two-factor-login'] = time();
+			$session['two-factor-provider'] = $provider;
+			$manager->update( $token, $session );
+		}
+
 		$response = $this->prepare_item_for_response( $token, $request );
 		if ( is_wp_error( $response ) ) {
 			return $response;
@@ -169,21 +184,15 @@ class Session_Controller extends WP_REST_Controller {
 		$user_providers = Two_Factor_Core::get_enabled_providers_for_user( $user );
 		$user_primary_provider = Two_Factor_Core::get_primary_provider_for_user( $user->ID );
 
-		$provider_name_map = [
-			'email' => 'Two_Factor_Email',
-			'totp' => 'Two_Factor_Totp',
-			'backup_codes' => 'Two_Factor_Backup_Codes',
-		];
-
 		$user_providers_public_names = [];
 		foreach ( $user_providers as $provider ) {
-			$name = array_search( $provider, $provider_name_map, true );
+			$name = array_search( $provider, static::NAME_MAP, true );
 			if ( $name ) {
 				$user_providers_public_names[] = $name;
 			}
 		}
 
-		$user_provider_primary_name = array_search( $user_primary_provider, $provider_name_map, true );
+		$user_provider_primary_name = array_search( $user_primary_provider::class, static::NAME_MAP, true );
 
 		$error = new WP_Error( '2fa_required', 'Please provide your 2FA code.', [
 			'status' => 401,
@@ -191,7 +200,7 @@ class Session_Controller extends WP_REST_Controller {
 			'2fa_provider_primary' => $user_provider_primary_name,
 		] );
 
-		$provider = $provider_name_map[ $request['2fa']['provider'] ];
+		$provider = static::NAME_MAP[ $request['2fa']['provider'] ];
 		$providers = Two_Factor_Core::get_providers();
 
 		// Validate provider / value if it's been passed.
