@@ -12,6 +12,12 @@ use WP_Session_Tokens;
 use WP_User;
 
 class Session_Controller extends WP_REST_Controller {
+	const NAME_MAP = [
+		'email' => 'Two_Factor_Email',
+		'totp' => 'Two_Factor_Totp',
+		'backup_codes' => 'Two_Factor_Backup_Codes',
+	];
+
 	const NONCE_ACTION = 'wp_rest_sessions';
 
 	/**
@@ -25,6 +31,19 @@ class Session_Controller extends WP_REST_Controller {
 	 * Register routes for authentication.
 	 */
 	public function register_routes() {
+		$mfa_args = [
+			'type' => 'object',
+			'properties' => [
+				'provider' => [
+					'type' => 'string',
+					'enum' => array_keys( static::NAME_MAP ),
+				],
+				'code' => [
+					'type' => 'string',
+				],
+			],
+			'required' => false,
+		];
 		register_rest_route( $this->namespace, '/sessions', [
 			[
 				'methods'  => WP_REST_Server::CREATABLE,
@@ -52,23 +71,7 @@ class Session_Controller extends WP_REST_Controller {
 						'type'    => 'boolean',
 						'default' => false,
 					],
-					'2fa' => [
-						'type' => 'object',
-						'properties' => [
-							'provider' => [
-								'type' => 'string',
-								'enum' => [
-									'email',
-									'totp',
-									'backup_codes',
-								],
-							],
-							'code' => [
-								'type' => 'string',
-							],
-						],
-						'required' => false,
-					],
+					'2fa' => $mfa_args,
 				],
 			],
 		] );
@@ -77,6 +80,14 @@ class Session_Controller extends WP_REST_Controller {
 				'methods' => WP_REST_Server::DELETABLE,
 				'callback' => [ $this, 'delete_item' ],
 				'permission_callback' => [ $this, 'check_authentication' ],
+			],
+		] );
+		register_rest_route( $this->namespace, '/sessions/revalidate', [
+			'methods' => WP_REST_Server::CREATABLE,
+			'callback' => [ $this, 'revalidate' ],
+			'permission_callback' => [ $this, 'check_authentication' ],
+			'args' => [
+				'2fa' => $mfa_args,
 			],
 		] );
 	}
@@ -145,6 +156,84 @@ class Session_Controller extends WP_REST_Controller {
 			return new WP_Error();
 		}
 
+		// Attach the 2FA session information.
+		if ( class_exists( 'Two_Factor_Core' ) ) {
+			$provider = static::NAME_MAP[ $request['2fa']['provider'] ];
+
+			// Add the 2FA data to the new session.
+			$manager = WP_Session_Tokens::get_instance( $user->ID );
+			$session = $manager->get( $token );
+			$session['two-factor-login'] = time();
+			$session['two-factor-provider'] = $provider;
+			$manager->update( $token, $session );
+		}
+
+		$response = $this->prepare_item_for_response( $token, $request );
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$response->set_status( 201 );
+		return $response;
+	}
+
+	/**
+	 * Revalidate a session.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return mixed REST response.
+	 */
+	public function revalidate( $request ) {
+		if ( ! is_user_logged_in() ) {
+			return new WP_Error(
+				'appregistry.auth.not_logged_in',
+				'You are not logged in'
+			);
+		}
+
+		if ( ! class_exists( 'Two_Factor_Core' ) ) {
+			return new WP_Error(
+				'appregistry.auth.2fa_not_active',
+				'Two Factor Authentication is not active'
+			);
+		}
+
+		// Enforce the use of the same 2FA mechanism that was used to initially
+		// log in.
+		$user = wp_get_current_user();
+		$token = wp_get_session_token();
+		if ( empty( $token ) ) {
+			return new WP_Error(
+				'appregistry.auth.no_session',
+				'No session found'
+			);
+		}
+
+		$manager = WP_Session_Tokens::get_instance( $user->ID );
+		$session = $manager->get( $token );
+
+		$provider_class = static::NAME_MAP[ $request['2fa']['provider'] ] ?? null;
+		if ( $provider_class !== $session['two-factor-provider'] ) {
+			// Force a bad 2FA to return the challenge.
+			$not_request = [];
+			return $this->validate_2fa( $not_request, $user );
+		}
+
+		// If the 2FA plugin is active, validate the 2fa part of the request.
+		$valid_2fa = $this->validate_2fa( $request, $user );
+		if ( is_wp_error( $valid_2fa ) ) {
+			return $valid_2fa;
+		}
+
+		// Update the session metadata with the revalidation details.
+		$token = wp_get_session_token();
+
+		// Update the session's data.
+		$manager = WP_Session_Tokens::get_instance( $user->ID );
+		$session = $manager->get( $token );
+		$session['two-factor-login'] = time();
+		$manager->update( $token, $session );
+
 		$response = $this->prepare_item_for_response( $token, $request );
 		if ( is_wp_error( $response ) ) {
 			return $response;
@@ -169,29 +258,26 @@ class Session_Controller extends WP_REST_Controller {
 		$user_providers = Two_Factor_Core::get_enabled_providers_for_user( $user );
 		$user_primary_provider = Two_Factor_Core::get_primary_provider_for_user( $user->ID );
 
-		$provider_name_map = [
-			'email' => 'Two_Factor_Email',
-			'totp' => 'Two_Factor_Totp',
-			'backup_codes' => 'Two_Factor_Backup_Codes',
-		];
-
 		$user_providers_public_names = [];
 		foreach ( $user_providers as $provider ) {
-			$name = array_search( $provider, $provider_name_map, true );
+			$name = array_search( $provider, static::NAME_MAP, true );
 			if ( $name ) {
 				$user_providers_public_names[] = $name;
 			}
 		}
 
-		$user_provider_primary_name = array_search( $user_primary_provider, $provider_name_map, true );
+		$user_provider_primary_name = array_search( $user_primary_provider::class, static::NAME_MAP, true );
 
 		$error = new WP_Error( '2fa_required', 'Please provide your 2FA code.', [
 			'status' => 401,
 			'2fa_providers' => $user_providers_public_names,
 			'2fa_provider_primary' => $user_provider_primary_name,
 		] );
+		if ( empty( $request['2fa']['provider'] ) ) {
+			return $error;
+		}
 
-		$provider = $provider_name_map[ $request['2fa']['provider'] ];
+		$provider = static::NAME_MAP[ $request['2fa']['provider'] ];
 		$providers = Two_Factor_Core::get_providers();
 
 		// Validate provider / value if it's been passed.
