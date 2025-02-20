@@ -212,8 +212,7 @@ class Session_Controller extends WP_REST_Controller {
 		$manager = WP_Session_Tokens::get_instance( $user->ID );
 		$session = $manager->get( $token );
 
-		$provider_class = static::NAME_MAP[ $request['2fa']['provider'] ] ?? null;
-		if ( $provider_class !== $session['two-factor-provider'] ) {
+		if ( empty( $session['two-factor-provider'] ) ) {
 			// Force a bad 2FA to return the challenge.
 			$not_request = [];
 			return $this->validate_2fa( $not_request, $user );
