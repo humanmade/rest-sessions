@@ -157,7 +157,7 @@ class Session_Controller extends WP_REST_Controller {
 		}
 
 		// Attach the 2FA session information.
-		if ( class_exists( 'Two_Factor_Core' ) ) {
+		if ( class_exists( 'Two_Factor_Core' ) && Two_Factor_Core::is_user_using_two_factor( $user->ID ) ) {
 			$provider = static::NAME_MAP[ $request['2fa']['provider'] ];
 
 			// Add the 2FA data to the new session.
