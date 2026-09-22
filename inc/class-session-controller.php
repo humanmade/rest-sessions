@@ -41,6 +41,10 @@ class Session_Controller extends WP_REST_Controller {
 				'code' => [
 					'type' => 'string',
 				],
+				'value' => [
+					'type' => 'string',
+					'description' => 'Deprecated alias for code.',
+				],
 			],
 			'required' => false,
 		];
@@ -278,16 +282,17 @@ class Session_Controller extends WP_REST_Controller {
 
 		$provider = static::NAME_MAP[ $request['2fa']['provider'] ];
 		$providers = Two_Factor_Core::get_providers();
+		$code = $request['2fa']['code'] ?? $request['2fa']['value'] ?? null;
 
 		// Validate provider / code if it's been passed.
-		if ( ! empty( $request['2fa']['provider'] ) && ! empty( $request['2fa']['code'] ) ) {
+		if ( ! empty( $request['2fa']['provider'] ) && ! empty( $code ) ) {
 			if ( ! in_array( $provider, $user_providers, true ) ) {
 				$error->add( 'invalid_2fa_provider', 'User does not have this provider enabled.' );
 			}
 
 			switch ( $provider ) {
 				case 'Two_Factor_Email':
-					$valid = $providers[ $provider ]->validate_token( $user->ID, $request['2fa']['code'] );
+					$valid = $providers[ $provider ]->validate_token( $user->ID, $code );
 					// Valid email token, all good!
 					if ( $valid === true ) {
 						return null;
@@ -296,14 +301,14 @@ class Session_Controller extends WP_REST_Controller {
 					break;
 				case 'Two_Factor_Totp':
 					$key = get_user_meta( $user->ID, $provider::SECRET_META_KEY, true );
-					$valid = $providers[ $provider ]->is_valid_authcode( $key, $request['2fa']['code'] );
+					$valid = $providers[ $provider ]->is_valid_authcode( $key, $code );
 					if ( $valid === true ) {
 						return null;
 					}
 					$error->add( 'invalid_2fa_value', 'The one-time code you provided was not valid.' );
 					break;
 				case 'Two_Factor_Backup_Codes':
-					$valid = $providers[ $provider ]->validate_code( $user, $request['2fa']['code'] );
+					$valid = $providers[ $provider ]->validate_code( $user, $code );
 					if ( $valid === true ) {
 						return null;
 					}
