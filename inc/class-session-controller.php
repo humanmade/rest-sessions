@@ -41,6 +41,10 @@ class Session_Controller extends WP_REST_Controller {
 				'code' => [
 					'type' => 'string',
 				],
+				'value' => [
+					'type' => 'string',
+					'description' => 'Deprecated alias for code.',
+				],
 			],
 			'required' => false,
 		];
@@ -278,16 +282,17 @@ class Session_Controller extends WP_REST_Controller {
 
 		$provider = static::NAME_MAP[ $request['2fa']['provider'] ];
 		$providers = Two_Factor_Core::get_providers();
+		$code = $request['2fa']['code'] ?? $request['2fa']['value'] ?? null;
 
-		// Validate provider / value if it's been passed.
-		if ( ! empty( $request['2fa']['provider'] ) && ! empty( $request['2fa']['value'] ) ) {
+		// Validate provider / code if it's been passed.
+		if ( ! empty( $request['2fa']['provider'] ) && ! empty( $code ) ) {
 			if ( ! in_array( $provider, $user_providers, true ) ) {
 				$error->add( 'invalid_2fa_provider', 'User does not have this provider enabled.' );
 			}
 
 			switch ( $provider ) {
 				case 'Two_Factor_Email':
-					$valid = $providers[ $provider ]->validate_token( $user->ID, $request['2fa']['value'] );
+					$valid = $providers[ $provider ]->validate_token( $user->ID, $code );
 					// Valid email token, all good!
 					if ( $valid === true ) {
 						return null;
@@ -296,14 +301,14 @@ class Session_Controller extends WP_REST_Controller {
 					break;
 				case 'Two_Factor_Totp':
 					$key = get_user_meta( $user->ID, $provider::SECRET_META_KEY, true );
-					$valid = $providers[ $provider ]->is_valid_authcode( $key, $request['2fa']['value'] );
+					$valid = $providers[ $provider ]->is_valid_authcode( $key, $code );
 					if ( $valid === true ) {
 						return null;
 					}
 					$error->add( 'invalid_2fa_value', 'The one-time code you provided was not valid.' );
 					break;
 				case 'Two_Factor_Backup_Codes':
-					$valid = $providers[ $provider ]->validate_code( $user, $request['2fa']['value'] );
+					$valid = $providers[ $provider ]->validate_code( $user, $code );
 					if ( $valid === true ) {
 						return null;
 					}
@@ -311,7 +316,7 @@ class Session_Controller extends WP_REST_Controller {
 					break;
 			}
 		} else {
-			// If a 2fa value was not provided, and we're going to return an error with the 2FA challange, we have to generate
+			// If a 2fa code was not provided, and we're going to return an error with the 2FA challange, we have to generate
 			// an email 2fa code (if that option is enabled on their account)
 			if ( in_array( 'Two_Factor_Email', $user_providers, true ) ) {
 				$providers['Two_Factor_Email']->generate_and_email_token( $user );
